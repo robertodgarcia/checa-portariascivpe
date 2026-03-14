@@ -142,6 +142,7 @@ def existe(url):
 # --------------------------
 
 def baixar(url, destino):
+    print(f"[DOWNLOAD] tentando baixar: {url}")
     try:
         with requests.get(
             url,
