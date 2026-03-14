@@ -11,7 +11,7 @@ import PyPDF2
 ANO = int(os.getenv("ANO", "2026"))
 
 PALAVRAS_CHAVE = [
-    p.strip().upper()
+    p.strip().strip('"').strip("'").upper()
     for p in os.getenv("PALAVRAS_CHAVE", "").split(",")
     if p.strip()
 ]
@@ -112,26 +112,43 @@ def url_bis_especial(numero):
 
 def existe(url):
     try:
-        r = requests.head(url, headers=HEADERS, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+        r = requests.head(
+            url,
+            headers=HEADERS,
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=True
+        )
+        print(f"[HEAD] {url} -> {r.status_code}")
         if r.status_code == 200:
             return True
         if r.status_code == 404:
             return False
-    except requests.RequestException:
-        pass
+    except requests.RequestException as e:
+        print(f"[HEAD] erro em {url}: {e}")
 
     try:
-        with requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT, stream=True) as r:
+        with requests.get(
+            url,
+            headers=HEADERS,
+            timeout=REQUEST_TIMEOUT,
+            stream=True
+        ) as r:
+            print(f"[GET] {url} -> {r.status_code}")
             return r.status_code == 200
     except requests.RequestException as e:
-        print(f"[HTTP] erro ao verificar {url}: {e}")
+        print(f"[GET] erro em {url}: {e}")
         return False
 
 # --------------------------
 
 def baixar(url, destino):
     try:
-        with requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT, stream=True) as r:
+        with requests.get(
+            url,
+            headers=HEADERS,
+            timeout=REQUEST_TIMEOUT,
+            stream=True
+        ) as r:
             if r.status_code != 200:
                 print(f"[Download] falha {url} HTTP {r.status_code}")
                 return False
@@ -175,7 +192,7 @@ def procurar_palavras(texto):
 
 # --------------------------
 
-def processar_bis(estado):
+def processar_bis(estado, relatorio):
     numero = estado["ULTIMO_BIS"] + 1
 
     while True:
@@ -183,6 +200,7 @@ def processar_bis(estado):
 
         if not existe(url):
             print(f"[BIS] não encontrado: {numero:03d}")
+            relatorio["proximo_bis_nao_encontrado"] = f"bisServ{numero:03d}_{ANO}.pdf"
             break
 
         nome = f"bisServ{numero:03d}_{ANO}.pdf"
@@ -193,10 +211,21 @@ def processar_bis(estado):
         ok = baixar(url, path)
         if not ok:
             print(f"[BIS] falha no download: {nome}")
+            relatorio["bis"].append({
+                "nome": nome,
+                "status": "ERRO NO DOWNLOAD",
+                "palavras": []
+            })
             break
 
         texto = extrair_texto(path)
         palavras = procurar_palavras(texto)
+
+        relatorio["bis"].append({
+            "nome": nome,
+            "status": "ENCONTRADO",
+            "palavras": palavras
+        })
 
         if palavras:
             enviar_telegram(
@@ -209,7 +238,7 @@ def processar_bis(estado):
 
 # --------------------------
 
-def processar_bis_especial(estado):
+def processar_bis_especial(estado, relatorio):
     numero = estado["ULTIMO_BIS_ESPECIAL"] + 1
 
     while True:
@@ -217,6 +246,7 @@ def processar_bis_especial(estado):
 
         if not existe(url):
             print(f"[BIS ESPECIAL] não encontrado: {numero:02d}")
+            relatorio["proximo_bis_especial_nao_encontrado"] = f"bisE{ANO}.{numero:02d}.pdf"
             break
 
         nome = f"bisE{ANO}.{numero:02d}.pdf"
@@ -227,10 +257,21 @@ def processar_bis_especial(estado):
         ok = baixar(url, path)
         if not ok:
             print(f"[BIS ESPECIAL] falha no download: {nome}")
+            relatorio["bis_especial"].append({
+                "nome": nome,
+                "status": "ERRO NO DOWNLOAD",
+                "palavras": []
+            })
             break
 
         texto = extrair_texto(path)
         palavras = procurar_palavras(texto)
+
+        relatorio["bis_especial"].append({
+            "nome": nome,
+            "status": "ENCONTRADO",
+            "palavras": palavras
+        })
 
         if palavras:
             enviar_telegram(
@@ -243,6 +284,54 @@ def processar_bis_especial(estado):
 
 # --------------------------
 
+def montar_relatorio(relatorio, estado_inicial, estado_final):
+    linhas = []
+    linhas.append("RELATÓRIO MONITOR BIS")
+    linhas.append("")
+    linhas.append(f"Estado inicial BIS: {estado_inicial['ULTIMO_BIS']:03d}")
+    linhas.append(f"Estado inicial BIS ESPECIAL: {estado_inicial['ULTIMO_BIS_ESPECIAL']:02d}")
+    linhas.append("")
+
+    linhas.append("BIS encontrados nesta execução:")
+    if relatorio["bis"]:
+        for item in relatorio["bis"]:
+            if item["palavras"]:
+                linhas.append(
+                    f"- {item['nome']} | COM PALAVRA-CHAVE | {', '.join(item['palavras'])}"
+                )
+            else:
+                linhas.append(
+                    f"- {item['nome']} | SEM PALAVRA-CHAVE"
+                )
+    else:
+        linhas.append("- Nenhum BIS novo encontrado")
+
+    linhas.append("")
+    linhas.append("BIS ESPECIAL encontrados nesta execução:")
+    if relatorio["bis_especial"]:
+        for item in relatorio["bis_especial"]:
+            if item["palavras"]:
+                linhas.append(
+                    f"- {item['nome']} | COM PALAVRA-CHAVE | {', '.join(item['palavras'])}"
+                )
+            else:
+                linhas.append(
+                    f"- {item['nome']} | SEM PALAVRA-CHAVE"
+                )
+    else:
+        linhas.append("- Nenhum BIS ESPECIAL novo encontrado")
+
+    linhas.append("")
+    linhas.append(f"Próximo BIS não encontrado: {relatorio['proximo_bis_nao_encontrado']}")
+    linhas.append(f"Próximo BIS ESPECIAL não encontrado: {relatorio['proximo_bis_especial_nao_encontrado']}")
+    linhas.append("")
+    linhas.append(f"Estado final BIS: {estado_final['ULTIMO_BIS']:03d}")
+    linhas.append(f"Estado final BIS ESPECIAL: {estado_final['ULTIMO_BIS_ESPECIAL']:02d}")
+
+    return "\n".join(linhas)
+
+# --------------------------
+
 def main():
     print("[INFO] Iniciando monitor...")
     print(f"[INFO] ANO={ANO}")
@@ -250,16 +339,26 @@ def main():
     print(f"[INFO] TELEGRAM_CHAT_ID={TELEGRAM_CHAT_ID}")
 
     estado = carregar_estado()
+    estado_inicial = dict(estado)
+
     print(f"[INFO] Estado inicial={estado}")
 
-    # teste opcional
-    enviar_telegram("Teste do monitor BIS")
+    relatorio = {
+        "bis": [],
+        "bis_especial": [],
+        "proximo_bis_nao_encontrado": "",
+        "proximo_bis_especial_nao_encontrado": ""
+    }
 
-    processar_bis(estado)
-    processar_bis_especial(estado)
+    processar_bis(estado, relatorio)
+    processar_bis_especial(estado, relatorio)
 
     salvar_estado(estado)
+
     print(f"[INFO] Estado final={estado}")
+
+    texto_relatorio = montar_relatorio(relatorio, estado_inicial, estado)
+    enviar_telegram(texto_relatorio)
 
 
 if __name__ == "__main__":
