@@ -1,7 +1,9 @@
 import os
 import json
-import requests
+from datetime import datetime
 from pathlib import Path
+
+import requests
 import PyPDF2
 
 # --------------------------
@@ -35,6 +37,7 @@ HEADERS = {
 
 # --------------------------
 
+
 def carregar_estado():
     if STATE_FILE.exists():
         return json.loads(STATE_FILE.read_text(encoding="utf-8"))
@@ -50,6 +53,7 @@ def salvar_estado(estado):
         json.dumps(estado, indent=2, ensure_ascii=False),
         encoding="utf-8"
     )
+
 
 # --------------------------
 
@@ -79,7 +83,7 @@ def enviar_telegram(msg):
 
 def enviar_documento(path):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("[Telegram] TOKEN ou CHAT_ID não configurados.")
+        print("[Telegram Upload] TOKEN ou CHAT_ID não configurados.")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument"
@@ -99,6 +103,7 @@ def enviar_documento(path):
         print(f"[Telegram Upload] erro ao enviar documento: {e}")
         return False
 
+
 # --------------------------
 
 def url_bis(numero):
@@ -107,6 +112,7 @@ def url_bis(numero):
 
 def url_bis_especial(numero):
     return f"https://www2.pc.pe.gov.br/arquivos/BisServEspecial{ANO}/bisE{ANO}.{numero:02d}.pdf"
+
 
 # --------------------------
 
@@ -139,6 +145,7 @@ def existe(url):
         print(f"[GET] erro em {url}: {e}")
         return False
 
+
 # --------------------------
 
 def baixar(url, destino):
@@ -164,6 +171,7 @@ def baixar(url, destino):
         print(f"[Download] erro ao baixar {url}: {e}")
         return False
 
+
 # --------------------------
 
 def extrair_texto(pdf):
@@ -172,24 +180,24 @@ def extrair_texto(pdf):
     try:
         with open(pdf, "rb") as f:
             reader = PyPDF2.PdfReader(f)
-            for p in reader.pages:
-                texto += p.extract_text() or ""
+            for pagina in reader.pages:
+                texto += pagina.extract_text() or ""
     except Exception as e:
         print(f"[PDF] erro ao extrair texto de {pdf}: {e}")
         return ""
 
     return texto.upper()
 
-# --------------------------
 
 def procurar_palavras(texto):
     achadas = []
 
-    for p in PALAVRAS_CHAVE:
-        if p in texto:
-            achadas.append(p)
+    for palavra in PALAVRAS_CHAVE:
+        if palavra in texto:
+            achadas.append(palavra)
 
     return achadas
+
 
 # --------------------------
 
@@ -207,15 +215,17 @@ def processar_bis(estado, relatorio):
         nome = f"bisServ{numero:03d}_{ANO}.pdf"
         path = DOWNLOAD_DIR / nome
 
-        print("[BIS] Baixando", nome)
+        print(f"[BIS] baixando {nome}")
 
         ok = baixar(url, path)
         if not ok:
             print(f"[BIS] falha no download: {nome}")
             relatorio["bis"].append({
                 "nome": nome,
-                "status": "ERRO NO DOWNLOAD",
-                "palavras": []
+                "tipo": "BIS",
+                "status": "ERRO_NO_DOWNLOAD",
+                "palavras": [],
+                "path": None
             })
             break
 
@@ -224,20 +234,15 @@ def processar_bis(estado, relatorio):
 
         relatorio["bis"].append({
             "nome": nome,
+            "tipo": "BIS",
             "status": "ENCONTRADO",
-            "palavras": palavras
+            "palavras": palavras,
+            "path": str(path)
         })
-
-        if palavras:
-            enviar_telegram(
-                f"ALERTA BIS {nome}\nPalavras: {', '.join(palavras)}"
-            )
-            enviar_documento(path)
 
         estado["ULTIMO_BIS"] = numero
         numero += 1
 
-# --------------------------
 
 def processar_bis_especial(estado, relatorio):
     numero = estado["ULTIMO_BIS_ESPECIAL"] + 1
@@ -253,15 +258,17 @@ def processar_bis_especial(estado, relatorio):
         nome = f"bisE{ANO}.{numero:02d}.pdf"
         path = DOWNLOAD_DIR / nome
 
-        print("[BIS ESPECIAL] Baixando", nome)
+        print(f"[BIS ESPECIAL] baixando {nome}")
 
         ok = baixar(url, path)
         if not ok:
             print(f"[BIS ESPECIAL] falha no download: {nome}")
             relatorio["bis_especial"].append({
                 "nome": nome,
-                "status": "ERRO NO DOWNLOAD",
-                "palavras": []
+                "tipo": "BIS ESPECIAL",
+                "status": "ERRO_NO_DOWNLOAD",
+                "palavras": [],
+                "path": None
             })
             break
 
@@ -270,66 +277,88 @@ def processar_bis_especial(estado, relatorio):
 
         relatorio["bis_especial"].append({
             "nome": nome,
+            "tipo": "BIS ESPECIAL",
             "status": "ENCONTRADO",
-            "palavras": palavras
+            "palavras": palavras,
+            "path": str(path)
         })
-
-        if palavras:
-            enviar_telegram(
-                f"ALERTA BIS ESPECIAL {nome}\nPalavras: {', '.join(palavras)}"
-            )
-            enviar_documento(path)
 
         estado["ULTIMO_BIS_ESPECIAL"] = numero
         numero += 1
 
+
 # --------------------------
 
-def montar_relatorio(relatorio, estado_inicial, estado_final):
+def montar_relatorio(relatorio):
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+    total_bis = len(relatorio["bis"])
+    total_bis_especial = len(relatorio["bis_especial"])
+    total_atualizacoes = total_bis + total_bis_especial
+
     linhas = []
-    linhas.append("RELATÓRIO MONITOR BIS")
+
+    # Nenhuma atualização
+    if total_atualizacoes == 0:
+        linhas.append("CONSULTA MONITOR BIS")
+        linhas.append("")
+        linhas.append(f"Consulta realizada em: {agora}")
+        linhas.append("Nenhuma atualização foi encontrada até o momento.")
+        return "\n".join(linhas)
+
+    # Houve atualização
+    linhas.append("ATUALIZAÇÃO IDENTIFICADA NO MONITOR BIS")
     linhas.append("")
-    linhas.append(f"Estado inicial BIS: {estado_inicial['ULTIMO_BIS']:03d}")
-    linhas.append(f"Estado inicial BIS ESPECIAL: {estado_inicial['ULTIMO_BIS_ESPECIAL']:02d}")
+    linhas.append(f"Consulta realizada em: {agora}")
+    linhas.append(f"Foram encontradas {total_atualizacoes} atualização(ões) nova(s).")
     linhas.append("")
 
-    linhas.append("BIS encontrados nesta execução:")
     if relatorio["bis"]:
+        linhas.append("BIS:")
         for item in relatorio["bis"]:
-            if item["palavras"]:
+            if item["status"] == "ERRO_NO_DOWNLOAD":
+                linhas.append(f"- {item['nome']}: arquivo localizado, mas houve erro no download.")
+            elif item["palavras"]:
                 linhas.append(
-                    f"- {item['nome']} | COM PALAVRA-CHAVE | {', '.join(item['palavras'])}"
+                    f"- {item['nome']}: atualização encontrada e palavra(s)-chave localizada(s): {', '.join(item['palavras'])}."
                 )
             else:
                 linhas.append(
-                    f"- {item['nome']} | SEM PALAVRA-CHAVE"
+                    f"- {item['nome']}: atualização encontrada, sem ocorrência das palavras-chave monitoradas."
                 )
-    else:
-        linhas.append("- Nenhum BIS novo encontrado")
+        linhas.append("")
 
-    linhas.append("")
-    linhas.append("BIS ESPECIAL encontrados nesta execução:")
     if relatorio["bis_especial"]:
+        linhas.append("BIS ESPECIAL:")
         for item in relatorio["bis_especial"]:
-            if item["palavras"]:
+            if item["status"] == "ERRO_NO_DOWNLOAD":
+                linhas.append(f"- {item['nome']}: arquivo localizado, mas houve erro no download.")
+            elif item["palavras"]:
                 linhas.append(
-                    f"- {item['nome']} | COM PALAVRA-CHAVE | {', '.join(item['palavras'])}"
+                    f"- {item['nome']}: atualização encontrada e palavra(s)-chave localizada(s): {', '.join(item['palavras'])}."
                 )
             else:
                 linhas.append(
-                    f"- {item['nome']} | SEM PALAVRA-CHAVE"
+                    f"- {item['nome']}: atualização encontrada, sem ocorrência das palavras-chave monitoradas."
                 )
-    else:
-        linhas.append("- Nenhum BIS ESPECIAL novo encontrado")
-
-    linhas.append("")
-    linhas.append(f"Próximo BIS não encontrado: {relatorio['proximo_bis_nao_encontrado']}")
-    linhas.append(f"Próximo BIS ESPECIAL não encontrado: {relatorio['proximo_bis_especial_nao_encontrado']}")
-    linhas.append("")
-    linhas.append(f"Estado final BIS: {estado_final['ULTIMO_BIS']:03d}")
-    linhas.append(f"Estado final BIS ESPECIAL: {estado_final['ULTIMO_BIS_ESPECIAL']:02d}")
+        linhas.append("")
 
     return "\n".join(linhas)
+
+
+def enviar_documentos_com_palavra_chave(relatorio):
+    enviados = 0
+
+    for grupo in (relatorio["bis"], relatorio["bis_especial"]):
+        for item in grupo:
+            if item["status"] == "ENCONTRADO" and item["palavras"] and item["path"]:
+                path = Path(item["path"])
+                if path.exists():
+                    if enviar_documento(path):
+                        enviados += 1
+
+    print(f"[INFO] documentos enviados ao Telegram: {enviados}")
+
 
 # --------------------------
 
@@ -340,8 +369,6 @@ def main():
     print(f"[INFO] TELEGRAM_CHAT_ID={TELEGRAM_CHAT_ID}")
 
     estado = carregar_estado()
-    estado_inicial = dict(estado)
-
     print(f"[INFO] Estado inicial={estado}")
 
     relatorio = {
@@ -358,8 +385,11 @@ def main():
 
     print(f"[INFO] Estado final={estado}")
 
-    texto_relatorio = montar_relatorio(relatorio, estado_inicial, estado)
+    texto_relatorio = montar_relatorio(relatorio)
     enviar_telegram(texto_relatorio)
+
+    # Envia o PDF apenas dos arquivos em que houve palavra-chave
+    enviar_documentos_com_palavra_chave(relatorio)
 
 
 if __name__ == "__main__":
