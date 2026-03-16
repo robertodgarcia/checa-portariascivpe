@@ -1,6 +1,7 @@
 import os
 import json
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 import requests
@@ -290,7 +291,7 @@ def processar_bis_especial(estado, relatorio):
 # --------------------------
 
 def montar_relatorio(relatorio):
-    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M:%S")
 
     total_bis = len(relatorio["bis"])
     total_bis_especial = len(relatorio["bis_especial"])
@@ -298,18 +299,16 @@ def montar_relatorio(relatorio):
 
     linhas = []
 
-    # Nenhuma atualização
     if total_atualizacoes == 0:
         linhas.append("CONSULTA MONITOR BIS")
         linhas.append("")
-        linhas.append(f"Consulta realizada em: {agora}")
+        linhas.append(f"Consulta realizada em (horário de Brasília): {agora}")
         linhas.append("Nenhuma atualização foi encontrada até o momento.")
         return "\n".join(linhas)
 
-    # Houve atualização
     linhas.append("ATUALIZAÇÃO IDENTIFICADA NO MONITOR BIS")
     linhas.append("")
-    linhas.append(f"Consulta realizada em: {agora}")
+    linhas.append(f"Consulta realizada em (horário de Brasília): {agora}")
     linhas.append(f"Foram encontradas {total_atualizacoes} atualização(ões) nova(s).")
     linhas.append("")
 
@@ -388,7 +387,6 @@ def main():
     texto_relatorio = montar_relatorio(relatorio)
     enviar_telegram(texto_relatorio)
 
-    # Envia o PDF apenas dos arquivos em que houve palavra-chave
     enviar_documentos_com_palavra_chave(relatorio)
 
 
